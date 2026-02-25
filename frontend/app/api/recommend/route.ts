@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import crypto from 'crypto'
+import { keccak256, toUtf8Bytes } from 'ethers'
 import Anthropic from '@anthropic-ai/sdk'
 
 const MOCK_RATES = {
@@ -31,11 +31,24 @@ function getOpportunities(token = 'USDC') {
   return opps.sort((a, b) => b.apy - a.apy)
 }
 
-function keccak256(text: string): string {
-  return '0x' + crypto.createHash('sha256').update(text).digest('hex')
+/**
+ * Compute reasoning hash using keccak256(toUtf8Bytes(text)).
+ *
+ * This matches exactly what YieldVault.sol stores on-chain:
+ *   keccak256(abi.encodePacked(aiReason))
+ *
+ * Auditors can verify off-chain reasoning against on-chain storage:
+ *   bytes32 expected = keccak256(abi.encodePacked(aiReason));
+ *   require(expected == submittedHash, "reasoning hash mismatch");
+ */
+function computeReasoningHash(text: string): string {
+  return keccak256(toUtf8Bytes(text))
 }
 
-async function generateReasoning(rec: Record<string, unknown>, amount: number): Promise<{ explanation: string; confidence: number }> {
+async function generateReasoning(
+  rec: Record<string, unknown>,
+  amount: number
+): Promise<{ explanation: string; confidence: number }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { explanation: fallbackExplanation(rec, amount), confidence: 0.75 }
 
@@ -78,7 +91,13 @@ function fallbackExplanation(rec: Record<string, unknown>, amount: number): stri
   const annual_gain = rec.annual_gain_usd as number
   const gas = rec.estimated_gas_usd as number
   const breakeven = rec.breakeven_days as number
-  return `Moving $${amount.toLocaleString()} USDC to ${rec.to_protocol} on ${rec.to_chain} captures a +${(to_apy - from_apy).toFixed(2)}% APY improvement (${from_apy.toFixed(2)}% → ${to_apy.toFixed(2)}%). Expected annual gain: $${annual_gain.toFixed(2)}. Gas cost ~$${gas.toFixed(2)} breaks even in ${breakeven.toFixed(1)} days — both protocols are battle-tested with >$500M TVL.`
+  return (
+    `Moving $${amount.toLocaleString()} USDC to ${rec.to_protocol} on ${rec.to_chain} captures a ` +
+    `+${(to_apy - from_apy).toFixed(2)}% APY improvement (${from_apy.toFixed(2)}% → ${to_apy.toFixed(2)}%). ` +
+    `Expected annual gain: $${annual_gain.toFixed(2)}. ` +
+    `Gas cost ~$${gas.toFixed(2)} breaks even in ${breakeven.toFixed(1)} days — ` +
+    `both protocols are battle-tested with >$500M TVL.`
+  )
 }
 
 export async function POST(req: NextRequest) {
@@ -113,7 +132,8 @@ export async function POST(req: NextRequest) {
 
   const { explanation, confidence } = await generateReasoning(rec, amount)
   rec.reasoning = explanation
-  rec.reasoning_hash = keccak256(explanation)
+  // keccak256(toUtf8Bytes(reasoning)) — verifiable against keccak256(abi.encodePacked(aiReason)) on-chain
+  rec.reasoning_hash = computeReasoningHash(explanation)
   rec.confidence = confidence
 
   return NextResponse.json(rec)
