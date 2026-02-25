@@ -1,6 +1,8 @@
 # 🌊 CrossYield — Cross-Chain Yield Optimizer
 
 > **ETHGlobal Cannes 2026** submission — April 3–5, 2026 | $275K prize pool
+>
+> Event URL: https://ethglobal.com/events/cannes2026 · Submission deadline: **Sunday April 5, 2026 at 09:00 AM CEST**
 
 CrossYield is an AI-powered cross-chain yield optimizer that automatically identifies the highest-yield DeFi opportunities across Ethereum and Arbitrum, and explains every rebalancing decision in plain English using **Claude AI**. Cross-chain messaging is powered by **LayerZero V2 OApp**.
 
@@ -9,40 +11,58 @@ CrossYield is an AI-powered cross-chain yield optimizer that automatically ident
 | Service | URL | Status |
 |---------|-----|--------|
 | **Frontend** | https://frontend-self-ten-84.vercel.app | ✅ Live |
-| **Backend API** | https://backend-zeta-vert-19.vercel.app | ✅ Live |
-| **API Docs** | https://backend-zeta-vert-19.vercel.app/docs | ✅ Live |
+| **API: /yields** | https://frontend-self-ten-84.vercel.app/api/yields | ✅ 200 OK |
+| **API: /recommend** | https://frontend-self-ten-84.vercel.app/api/recommend | ✅ 200 OK (POST) |
+| **API: /history** | https://frontend-self-ten-84.vercel.app/api/history | ✅ 200 OK |
 
-> **Note on yield data:** The backend attempts to fetch live rates from Aave V3 (The Graph), Compound V3, and Curve Finance APIs. When those APIs are unreachable (rate limits, testnet context), it transparently falls back to representative mock rates and labels the response `"source": "mock"` in the `_meta` field. The `/yields` response always includes this flag so the UI can display it clearly.
+### Quick API Verification
+
+```bash
+# Yield rates
+curl https://frontend-self-ten-84.vercel.app/api/yields
+
+# AI recommendation (POST)
+curl -X POST https://frontend-self-ten-84.vercel.app/api/recommend \
+  -H "Content-Type: application/json" \
+  -d '{"wallet":"0xYourAddress","amount":10000}'
+
+# Rebalance history
+curl https://frontend-self-ten-84.vercel.app/api/history
+```
+
+> **Note on yield data:** The backend attempts to fetch live rates from the Aave V3 subgraph. When the subgraph is unreachable (rate limits, cold start), it falls back to representative rates and labels the response `"data_source": "mock"`. The frontend shows an amber banner when displaying mock data and a green banner for live data.
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Next.js Frontend                         │
+│                     Next.js 14 Frontend                      │
 │         Portfolio View │ Yield Compare │ Rebalance History   │
-│         (Vercel — https://frontend-self-ten-84.vercel.app)   │
+│         https://frontend-self-ten-84.vercel.app              │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │           Next.js API Routes (serverless)            │   │
+│  │  /api/yields · /api/recommend · /api/history         │   │
+│  │  Claude AI (Haiku) · Aave V3 subgraph               │   │
+│  └─────────────────────────────────────────────────────┘   │
 └──────────────────────────────┬──────────────────────────────┘
-                               │ REST API
-┌──────────────────────────────▼──────────────────────────────┐
-│                     FastAPI Backend                          │
-│   Yield Aggregator (Aave/Compound/Curve) │ Claude AI Engine  │
-│   (Vercel — https://backend-zeta-vert-19.vercel.app)         │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
+                               │ LayerZero V2 OApp
         ┌──────────────────────┴──────────────────────┐
         │                                             │
 ┌───────▼──────────┐                      ┌──────────▼───────┐
 │   Sepolia L1     │◄────LayerZero V2─────►│ Arbitrum Sepolia │
 │  YieldVault.sol  │     OApp Messaging    │  YieldVault.sol  │
-│  (Aave/Compound) │                       │  (Aave/Curve)    │
+│  (Aave/Compound) │  EID 40161 ↔ 40231   │  (Aave/Curve)    │
 └──────────────────┘                       └──────────────────┘
 ```
+
+**All API logic runs as Vercel serverless functions inside the Next.js app — no separate backend service.**
 
 ## ✨ Key Features
 
 - **Cross-chain rebalancing**: LayerZero V2 OApp sends funds from lower-yield to higher-yield chains
-- **AI explanations**: Claude explains every rebalancing decision in plain English (with confidence score + hash)
-- **Live yield data**: Real-time APY from Aave V3, Compound V3, Curve Finance (with transparent mock fallback)
+- **AI explanations**: Claude explains every rebalancing decision in plain English (with confidence score + reasoning hash)
+- **Live yield data**: Real-time APY from Aave V3 subgraph (with transparent mock fallback)
 - **Gas-aware**: Rebalancing only triggers when APY delta × principal > gas cost (break-even < 90 days)
 - **Portfolio dashboard**: Track positions, history, and projected earnings
 
@@ -52,95 +72,80 @@ CrossYield is an AI-powered cross-chain yield optimizer that automatically ident
 |-------|-----------|
 | Smart Contracts | Solidity 0.8.24, LayerZero V2 OApp |
 | Cross-chain | LayerZero V2 (Sepolia ↔ Arbitrum Sepolia, EID 40161/40231) |
-| Backend | FastAPI, Python 3.11, Anthropic SDK (Claude Haiku) |
+| API / AI | Next.js API Routes (serverless), Anthropic Claude Haiku |
 | Frontend | Next.js 14, TailwindCSS, wagmi v2, viem |
-| Deployment | Vercel (both backend and frontend) |
+| Deployment | Vercel (frontend + API routes as serverless functions) |
 
 ## 📋 Contract Addresses (Testnet)
 
-Contracts compile cleanly. Testnet deployment requires a funded Sepolia wallet.
+> **Pre-event status:** Contracts are written, compile cleanly, and are ready to deploy. Testnet deployment happens at the event (April 3–5, 2026) when a funded deployer wallet is available. See [`contracts/deployments/addresses.json`](contracts/deployments/addresses.json) for current status and LayerZero endpoint addresses.
 
-See [`contracts/deployments/README.md`](contracts/deployments/README.md) for full deployment instructions.
+**LayerZero V2 Endpoints (hardcoded in contracts):**
 
-| Contract | Network | Address |
-|----------|---------|---------|
-| YieldVault | Sepolia | *Deploy with `npx hardhat run scripts/deploy.ts --network sepolia`* |
-| YieldVault | Arbitrum Sepolia | *Deploy with `npx hardhat run scripts/deploy.ts --network arbitrumSepolia`* |
-| CrossYieldOApp | Sepolia | *Deploy with `npx hardhat run scripts/deploy.ts --network sepolia`* |
+| Network | Endpoint Address | EID |
+|---------|-----------------|-----|
+| Sepolia | `0x6EDCE65403992e310A62460808c4b910D972f10f` | 40161 |
+| Arbitrum Sepolia | `0x6EDCE65403992e310A62460808c4b910D972f10f` | 40231 |
 
-**LayerZero V2 Endpoints used:**
-- Sepolia: `0x6EDCE65403992e310A62460808c4b910D972f10f` (EID 40161)
-- Arbitrum Sepolia: `0x6EDCE65403992e310A62460808c4b910D972f10f` (EID 40231)
+**To deploy yourself:**
+```bash
+cd contracts
+npm install --legacy-peer-deps
+export PRIVATE_KEY=0x...          # Funded Sepolia wallet
+export ALCHEMY_API_KEY=...        # Or use public RPCs in hardhat.config.ts
+npx hardhat run scripts/deploy.ts --network sepolia
+npx hardhat run scripts/deploy.ts --network arbitrumSepolia
+# Addresses saved to contracts/deployments/sepolia.json + arbitrumSepolia.json
+```
 
 ## 🚀 Quick Start
+
+### Frontend (local)
+```bash
+cd frontend
+npm install
+npm run dev
+# App at http://localhost:3000 — API routes at http://localhost:3000/api/*
+```
 
 ### Contracts
 ```bash
 cd contracts
 npm install --legacy-peer-deps
-npx hardhat compile
-# Requires funded wallet — see contracts/deployments/README.md
-npx hardhat run scripts/deploy.ts --network sepolia
-npx hardhat run scripts/deploy.ts --network arbitrumSepolia
-```
-
-### Backend
-```bash
-cd backend
-pip install uv
-uv sync
-# Optional: set ANTHROPIC_API_KEY for live Claude reasoning
-export ANTHROPIC_API_KEY=sk-ant-...
-uv run uvicorn main:app --reload
-# API available at http://localhost:8000/docs
-```
-
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-# App available at http://localhost:3000
+npx hardhat compile         # Verify contracts compile
+npx hardhat test            # Run test suite
 ```
 
 ## 🌐 Environment Variables
 
-### Backend (`backend/.env`)
-```env
-ANTHROPIC_API_KEY=sk-ant-...   # Required for live Claude reasoning
-                                # Without it, falls back to template explanations
-```
-
 ### Frontend (`frontend/.env.local`)
 ```env
-NEXT_PUBLIC_API_URL=https://backend-zeta-vert-19.vercel.app
-ANTHROPIC_API_KEY=sk-ant-...   # Used by Next.js API routes for Claude
+ANTHROPIC_API_KEY=sk-ant-...   # Enables live Claude reasoning in /api/recommend
+                                # Without it, falls back to template explanations
 ```
 
 ## 📊 API Reference
 
+All endpoints live at `https://frontend-self-ten-84.vercel.app/api/*`
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/yields` | GET | Current APY rates across all protocols/chains |
-| `/recommend` | POST | AI-powered rebalancing recommendation |
-| `/rebalance` | POST | Queue a cross-chain rebalance job |
-| `/rebalance/{id}` | GET | Poll job status |
-| `/history` | GET | Rebalancing history with AI reasoning |
-| `/portfolio/{wallet}` | GET | Portfolio summary |
-| `/protocols` | GET | Supported protocols and chains |
+| `/api/yields` | GET | Current APY rates (Aave V3 live or mock fallback) |
+| `/api/recommend` | POST | AI-powered rebalancing recommendation via Claude |
+| `/api/history` | GET | Rebalancing history with AI reasoning |
 
 ## 🏆 ETHGlobal Cannes 2026 Prize Targets
 
-- **LayerZero**: Best use of LayerZero V2 OApp (cross-chain yield routing)
-- **Anthropic**: Best Claude integration (AI reasoning on every rebalance)
-- **Aave**: Best DeFi application built on Aave
+- **LayerZero** ($20K): Best use of LayerZero V2 OApp (cross-chain yield routing)
+- **Anthropic** ($10K): Best Claude integration (AI reasoning on every rebalance)
+- **Aave** ($10K): Best DeFi application built on Aave
 - **Overall**: Best DeFi / Cross-Chain project
 
 ## 📅 Event Details
 
 - **Event**: ETHGlobal Cannes 2026
-- **Dates**: April 3–5, 2026 — Palais des Festivals, Cannes, France
+- **URL**: https://ethglobal.com/events/cannes2026
+- **Dates**: April 3–5, 2026 — Palais des Festivals et des Congrès, Cannes, France
 - **Submission deadline**: Sunday, April 5, 2026 at 09:00 AM CEST
 - **Prize pool**: $275,000
 
