@@ -1,0 +1,17 @@
+{
+  "_note": "Fill in addresses after running: npx hardhat run scripts/deploy.ts --network sepolia && --network arbitrumSepolia",
+  "sepolia": {
+    "chainId": 11155111,
+    "layerZeroEid": 40161,
+    "YieldVault": "",
+    "YieldOptimizer": "",
+    "etherscan": ""
+  },
+  "arbitrumSepolia": {
+    "chainId": 421614,
+    "layerZeroEid": 40231,
+    "YieldVault": "",
+    "YieldOptimizer": "",
+    "arbiscan": ""
+  }
+}
