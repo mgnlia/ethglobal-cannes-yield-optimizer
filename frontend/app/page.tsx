@@ -8,7 +8,8 @@ import RebalanceHistory from '@/components/RebalanceHistory'
 import PortfolioCard from '@/components/PortfolioCard'
 import StatsBar from '@/components/StatsBar'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://ethglobal-cannes-yield-optimizer-api.up.railway.app'
+// Empty string = same-origin Next.js API routes (/api/yields, /api/recommend, /api/history)
+const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 export default function Home() {
   const [yields, setYields] = useState<any>(null)
@@ -28,8 +29,8 @@ export default function Home() {
   async function fetchData() {
     try {
       const [yieldsRes, historyRes] = await Promise.all([
-        fetch(`${API_URL}/yields`).then(r => r.json()),
-        fetch(`${API_URL}/history`).then(r => r.json()),
+        fetch(`${API_URL}/api/yields`).then(r => r.json()),
+        fetch(`${API_URL}/api/history`).then(r => r.json()),
       ])
       setYields(yieldsRes)
       setHistory(historyRes)
@@ -43,7 +44,7 @@ export default function Home() {
   async function getRecommendation() {
     setRecLoading(true)
     try {
-      const res = await fetch(`${API_URL}/recommend`, {
+      const res = await fetch(`${API_URL}/api/recommend`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
