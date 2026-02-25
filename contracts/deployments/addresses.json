@@ -1,18 +1,20 @@
 {
-  "_status": "pre-event",
-  "_note": "Contracts compile and pass tests. Testnet deployment happens at ETHGlobal Cannes (April 3–5, 2026) with a funded deployer wallet. Run `npx hardhat run scripts/deploy.ts --network sepolia` to populate real addresses.",
+  "_status": "pending-testnet-deployment",
+  "_note": "Contracts compile and pass tests (npx hardhat compile && npx hardhat test). Testnet deployment requires a funded deployer wallet. Will be deployed at ETHGlobal Cannes (April 3–5, 2026). LayerZero V2 endpoint addresses below are confirmed-real from the official LZ docs.",
 
   "layerzero_v2_endpoints": {
     "sepolia": {
       "address": "0x6EDCE65403992e310A62460808c4b910D972f10f",
       "eid": 40161,
       "chainId": 11155111,
+      "source": "https://docs.layerzero.network/v2/developers/evm/technical-reference/deployed-contracts",
       "explorer": "https://sepolia.etherscan.io/address/0x6EDCE65403992e310A62460808c4b910D972f10f"
     },
     "arbitrumSepolia": {
       "address": "0x6EDCE65403992e310A62460808c4b910D972f10f",
       "eid": 40231,
       "chainId": 421614,
+      "source": "https://docs.layerzero.network/v2/developers/evm/technical-reference/deployed-contracts",
       "explorer": "https://sepolia.arbiscan.io/address/0x6EDCE65403992e310A62460808c4b910D972f10f"
     }
   },
@@ -20,43 +22,46 @@
   "contracts": {
     "YieldVault": {
       "sepolia": {
-        "address": null,
-        "deployer": null,
-        "txHash": null,
+        "address": "PENDING_TESTNET_DEPLOYMENT",
+        "deployer": "PENDING_TESTNET_DEPLOYMENT",
+        "txHash": "PENDING_TESTNET_DEPLOYMENT",
         "blockNumber": null,
         "deployedAt": null,
-        "explorer": null,
-        "deployCommand": "npx hardhat run scripts/deploy.ts --network sepolia"
+        "etherscan": "PENDING — will be https://sepolia.etherscan.io/address/<ADDRESS>",
+        "deployCommand": "npx hardhat run scripts/deploy.ts --network sepolia",
+        "verifyCommand": "npx hardhat verify --network sepolia <ADDRESS> 0x6EDCE65403992e310A62460808c4b910D972f10f <DEPLOYER> <DEPLOYER>"
       },
       "arbitrumSepolia": {
-        "address": null,
-        "deployer": null,
-        "txHash": null,
+        "address": "PENDING_TESTNET_DEPLOYMENT",
+        "deployer": "PENDING_TESTNET_DEPLOYMENT",
+        "txHash": "PENDING_TESTNET_DEPLOYMENT",
         "blockNumber": null,
         "deployedAt": null,
-        "explorer": null,
-        "deployCommand": "npx hardhat run scripts/deploy.ts --network arbitrumSepolia"
+        "arbiscan": "PENDING — will be https://sepolia.arbiscan.io/address/<ADDRESS>",
+        "deployCommand": "npx hardhat run scripts/deploy.ts --network arbitrumSepolia",
+        "verifyCommand": "npx hardhat verify --network arbitrumSepolia <ADDRESS> 0x6EDCE65403992e310A62460808c4b910D972f10f <DEPLOYER> <DEPLOYER>"
       }
     }
   },
 
   "deploy_instructions": {
     "prereqs": [
-      "PRIVATE_KEY env var (funded Sepolia wallet — get ETH at https://sepoliafaucet.com)",
-      "ALCHEMY_API_KEY env var (or edit hardhat.config.ts to use public RPCs)"
+      "PRIVATE_KEY env var — funded Sepolia wallet (get ETH at https://sepoliafaucet.com)",
+      "ALCHEMY_API_KEY env var — OR edit hardhat.config.ts to use the public RPCs below"
     ],
-    "public_rpcs": {
+    "public_rpcs_no_key_needed": {
       "sepolia": "https://rpc.ankr.com/eth_sepolia",
       "arbitrumSepolia": "https://sepolia-rollup.arbitrum.io/rpc"
     },
     "steps": [
-      "cd contracts && npm install --legacy-peer-deps",
+      "cd contracts",
+      "npm install --legacy-peer-deps",
       "npx hardhat compile",
       "npx hardhat test",
-      "npx hardhat run scripts/deploy.ts --network sepolia",
-      "npx hardhat run scripts/deploy.ts --network arbitrumSepolia",
-      "npx hardhat verify --network sepolia <ADDRESS> <LZ_ENDPOINT> <DEPLOYER> <DEPLOYER>",
-      "npx hardhat verify --network arbitrumSepolia <ADDRESS> <LZ_ENDPOINT> <DEPLOYER> <DEPLOYER>"
+      "PRIVATE_KEY=0x... npx hardhat run scripts/deploy.ts --network sepolia",
+      "PRIVATE_KEY=0x... npx hardhat run scripts/deploy.ts --network arbitrumSepolia",
+      "# Addresses auto-saved to deployments/sepolia.json + deployments/arbitrumSepolia.json",
+      "# Then verify on Etherscan/Arbiscan using the verifyCommand above"
     ]
   }
 }
