@@ -1,323 +1,301 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.24;
 
-import { OApp, Origin, MessagingFee } from "@layerzerolabs/oapp-evm/contracts/oapp/OApp.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
-/**
- * @title YieldVault
- * @notice Cross-chain yield optimizer using LayerZero V2 OApp pattern.
- *         Receives rebalancing instructions from the orchestrator and
- *         moves funds to the highest-yielding protocol on each chain.
- * @dev Deployed on Sepolia (EID: 40161) and Arbitrum Sepolia (EID: 40231)
- */
-contract YieldVault is OApp {
+/// @title YieldVault
+/// @notice Manages user deposits and routes them to the highest-yield protocol on each chain.
+///         Receives cross-chain rebalancing instructions from CrossYieldOApp.
+/// @dev Supports USDC deposits, tracks shares per user, and integrates with Aave/Compound/Curve.
+contract YieldVault is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Types
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Structs ────────────────────────────────────────────────────────────
 
-    enum Protocol { NONE, AAVE, COMPOUND, CURVE }
-
-    struct Position {
-        address token;
-        uint256 amount;
-        Protocol protocol;
-        uint256 depositedAt;
-        uint256 lastYieldRate; // basis points (1 bp = 0.01%)
+    struct Protocol {
+        address adapter;      // Address of the protocol adapter
+        string  name;         // Human-readable name (e.g. "Aave V3")
+        bool    active;       // Whether this protocol is currently accepting deposits
+        uint256 totalDeposited; // Total assets deposited into this protocol
     }
 
-    struct RebalanceMessage {
-        address token;
-        uint256 amount;
-        Protocol targetProtocol;
-        uint256 expectedApy;       // basis points
-        bytes32 reasoningHash;     // keccak256 of LLM reasoning string
+    struct UserPosition {
+        uint256 shares;           // Vault shares held
+        uint256 depositedAt;      // Block timestamp of last deposit
+        uint256 totalDeposited;   // Cumulative USDC deposited (for PnL tracking)
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // State
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// @notice User address => token => Position
-    mapping(address => mapping(address => Position)) public positions;
-
-    /// @notice Protocol => yield rate in basis points (updated by oracle)
-    mapping(Protocol => uint256) public protocolYieldRates;
-
-    /// @notice Total value locked per token
-    mapping(address => uint256) public tvl;
-
-    /// @notice Orchestrator address allowed to trigger rebalances
-    address public orchestrator;
-
-    /// @notice Rebalance history
-    RebalanceEvent[] public rebalanceHistory;
-
-    struct RebalanceEvent {
+    struct RebalanceRecord {
         uint256 timestamp;
-        address token;
+        uint256 fromProtocolId;
+        uint256 toProtocolId;
         uint256 amount;
-        Protocol fromProtocol;
-        Protocol toProtocol;
-        uint256 fromApy;
-        uint256 toApy;
-        bytes32 reasoningHash;
-        uint32 sourceChainEid; // 0 if local
+        string  aiReason;         // Claude's explanation
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Events
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── State ──────────────────────────────────────────────────────────────
 
-    event Deposited(address indexed user, address indexed token, uint256 amount, Protocol protocol);
-    event Withdrawn(address indexed user, address indexed token, uint256 amount);
-    event Rebalanced(address indexed token, uint256 amount, Protocol from, Protocol to, uint256 fromApy, uint256 toApy);
-    event CrossChainRebalanceReceived(uint32 srcEid, address token, uint256 amount, Protocol targetProtocol);
-    event YieldRateUpdated(Protocol protocol, uint256 newRate);
-    event OrchestratorUpdated(address newOrchestrator);
+    IERC20  public immutable asset;          // USDC
+    address public           crossYieldOApp; // The LayerZero OApp (only caller for cross-chain rebalance)
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Errors
-    // ─────────────────────────────────────────────────────────────────────────
+    uint256 public totalShares;
+    uint256 public totalAssets;
+    uint256 public activeProtocolId;
 
-    error NotOrchestrator();
-    error InsufficientBalance();
-    error InvalidProtocol();
+    Protocol[]         public protocols;
+    RebalanceRecord[]  public rebalanceHistory;
+
+    mapping(address => UserPosition) public positions;
+
+    // ─── Events ─────────────────────────────────────────────────────────────
+
+    event Deposited(address indexed user, uint256 assets, uint256 shares);
+    event Withdrawn(address indexed user, uint256 assets, uint256 shares);
+    event Rebalanced(
+        uint256 indexed fromProtocol,
+        uint256 indexed toProtocol,
+        uint256 amount,
+        string  aiReason
+    );
+    event ProtocolAdded(uint256 indexed id, string name, address adapter);
+    event ProtocolActivated(uint256 indexed id);
+    event CrossYieldOAppSet(address indexed oapp);
+
+    // ─── Errors ─────────────────────────────────────────────────────────────
+
     error ZeroAmount();
+    error ZeroShares();
+    error InsufficientShares();
+    error UnauthorizedRebalancer();
+    error InvalidProtocol();
+    error NoProtocolsConfigured();
+    error SameProtocol();
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Constructor
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Constructor ────────────────────────────────────────────────────────
 
-    constructor(
-        address _endpoint,
-        address _owner,
-        address _orchestrator
-    ) OApp(_endpoint, _owner) Ownable(_owner) {
-        orchestrator = _orchestrator;
+    constructor(address _asset, address _owner) Ownable(_owner) {
+        asset = IERC20(_asset);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Modifiers
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Modifiers ──────────────────────────────────────────────────────────
 
-    modifier onlyOrchestrator() {
-        if (msg.sender != orchestrator) revert NotOrchestrator();
+    modifier onlyCrossYieldOApp() {
+        if (msg.sender != crossYieldOApp && msg.sender != owner()) {
+            revert UnauthorizedRebalancer();
+        }
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // User Functions
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Admin ──────────────────────────────────────────────────────────────
 
-    /**
-     * @notice Deposit tokens into the vault for yield optimization
-     * @param token ERC-20 token address
-     * @param amount Amount to deposit
-     * @param initialProtocol Starting protocol (can be rebalanced later)
-     */
-    function deposit(address token, uint256 amount, Protocol initialProtocol) external {
-        if (amount == 0) revert ZeroAmount();
-        if (initialProtocol == Protocol.NONE) revert InvalidProtocol();
-
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-
-        Position storage pos = positions[msg.sender][token];
-        pos.token = token;
-        pos.amount += amount;
-        pos.protocol = initialProtocol;
-        pos.depositedAt = block.timestamp;
-        pos.lastYieldRate = protocolYieldRates[initialProtocol];
-
-        tvl[token] += amount;
-
-        emit Deposited(msg.sender, token, amount, initialProtocol);
+    function setCrossYieldOApp(address _oapp) external onlyOwner {
+        crossYieldOApp = _oapp;
+        emit CrossYieldOAppSet(_oapp);
     }
 
-    /**
-     * @notice Withdraw tokens from the vault
-     * @param token ERC-20 token address
-     * @param amount Amount to withdraw
-     */
-    function withdraw(address token, uint256 amount) external {
-        Position storage pos = positions[msg.sender][token];
-        if (pos.amount < amount) revert InsufficientBalance();
-
-        pos.amount -= amount;
-        tvl[token] -= amount;
-
-        IERC20(token).safeTransfer(msg.sender, amount);
-
-        emit Withdrawn(msg.sender, token, amount);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Orchestrator Functions (local rebalance)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * @notice Rebalance a user's position to a new protocol
-     * @param user User whose position to rebalance
-     * @param token Token to rebalance
-     * @param targetProtocol New protocol
-     * @param reasoningHash Hash of LLM reasoning string
-     */
-    function rebalancePosition(
-        address user,
-        address token,
-        Protocol targetProtocol,
-        bytes32 reasoningHash
-    ) external onlyOrchestrator {
-        if (targetProtocol == Protocol.NONE) revert InvalidProtocol();
-
-        Position storage pos = positions[user][token];
-        if (pos.amount == 0) revert InsufficientBalance();
-
-        Protocol fromProtocol = pos.protocol;
-        uint256 fromApy = protocolYieldRates[fromProtocol];
-        uint256 toApy = protocolYieldRates[targetProtocol];
-
-        pos.protocol = targetProtocol;
-        pos.lastYieldRate = toApy;
-
-        rebalanceHistory.push(RebalanceEvent({
-            timestamp: block.timestamp,
-            token: token,
-            amount: pos.amount,
-            fromProtocol: fromProtocol,
-            toProtocol: targetProtocol,
-            fromApy: fromApy,
-            toApy: toApy,
-            reasoningHash: reasoningHash,
-            sourceChainEid: 0
+    function addProtocol(string calldata name, address adapter) external onlyOwner {
+        protocols.push(Protocol({
+            adapter: adapter,
+            name: name,
+            active: false,
+            totalDeposited: 0
         }));
-
-        emit Rebalanced(token, pos.amount, fromProtocol, targetProtocol, fromApy, toApy);
+        emit ProtocolAdded(protocols.length - 1, name, adapter);
     }
 
-    /**
-     * @notice Update yield rates for all protocols (called by oracle/backend)
-     */
-    function updateYieldRates(
-        uint256 aaveRate,
-        uint256 compoundRate,
-        uint256 curveRate
-    ) external onlyOrchestrator {
-        protocolYieldRates[Protocol.AAVE] = aaveRate;
-        protocolYieldRates[Protocol.COMPOUND] = compoundRate;
-        protocolYieldRates[Protocol.CURVE] = curveRate;
-
-        emit YieldRateUpdated(Protocol.AAVE, aaveRate);
-        emit YieldRateUpdated(Protocol.COMPOUND, compoundRate);
-        emit YieldRateUpdated(Protocol.CURVE, curveRate);
+    function setActiveProtocol(uint256 protocolId) external onlyOwner {
+        if (protocolId >= protocols.length) revert InvalidProtocol();
+        activeProtocolId = protocolId;
+        protocols[protocolId].active = true;
+        emit ProtocolActivated(protocolId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // LayerZero V2 — Cross-Chain Rebalance
-    // ─────────────────────────────────────────────────────────────────────────
+    function pause()   external onlyOwner { _pause(); }
+    function unpause() external onlyOwner { _unpause(); }
 
-    /**
-     * @notice Send a cross-chain rebalance instruction to another chain's YieldVault
-     * @param dstEid Destination chain endpoint ID
-     * @param message Encoded RebalanceMessage
-     * @param options LayerZero messaging options (gas, value)
-     */
-    function sendCrossChainRebalance(
-        uint32 dstEid,
-        RebalanceMessage calldata message,
-        bytes calldata options
-    ) external payable onlyOrchestrator {
-        bytes memory payload = abi.encode(message);
+    // ─── User-facing ────────────────────────────────────────────────────────
 
-        _lzSend(
-            dstEid,
-            payload,
-            options,
-            MessagingFee(msg.value, 0),
-            payable(msg.sender)
-        );
-    }
+    /// @notice Deposit USDC into the vault, receive shares
+    function deposit(uint256 assets) external nonReentrant whenNotPaused returns (uint256 shares) {
+        if (assets == 0) revert ZeroAmount();
 
-    /**
-     * @notice Quote the LayerZero fee for a cross-chain rebalance
-     */
-    function quoteCrossChainRebalance(
-        uint32 dstEid,
-        RebalanceMessage calldata message,
-        bytes calldata options
-    ) external view returns (MessagingFee memory fee) {
-        bytes memory payload = abi.encode(message);
-        return _quote(dstEid, payload, options, false);
-    }
+        shares = _convertToShares(assets);
+        if (shares == 0) revert ZeroShares();
 
-    /**
-     * @notice Receive cross-chain rebalance message from LayerZero
-     */
-    function _lzReceive(
-        Origin calldata origin,
-        bytes32, // guid
-        bytes calldata payload,
-        address, // executor
-        bytes calldata // extraData
-    ) internal override {
-        RebalanceMessage memory message = abi.decode(payload, (RebalanceMessage));
+        asset.safeTransferFrom(msg.sender, address(this), assets);
 
-        // Update TVL tracking for cross-chain incoming funds
-        tvl[message.token] += message.amount;
+        totalShares += shares;
+        totalAssets += assets;
 
-        rebalanceHistory.push(RebalanceEvent({
-            timestamp: block.timestamp,
-            token: message.token,
-            amount: message.amount,
-            fromProtocol: Protocol.NONE,
-            toProtocol: message.targetProtocol,
-            fromApy: 0,
-            toApy: message.expectedApy,
-            reasoningHash: message.reasoningHash,
-            sourceChainEid: origin.srcEid
-        }));
+        UserPosition storage pos = positions[msg.sender];
+        pos.shares          += shares;
+        pos.depositedAt      = block.timestamp;
+        pos.totalDeposited  += assets;
 
-        emit CrossChainRebalanceReceived(origin.srcEid, message.token, message.amount, message.targetProtocol);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Admin
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function setOrchestrator(address _orchestrator) external onlyOwner {
-        orchestrator = _orchestrator;
-        emit OrchestratorUpdated(_orchestrator);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // View Functions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function getPosition(address user, address token) external view returns (Position memory) {
-        return positions[user][token];
-    }
-
-    function getRebalanceHistory(uint256 limit) external view returns (RebalanceEvent[] memory) {
-        uint256 len = rebalanceHistory.length;
-        uint256 count = limit < len ? limit : len;
-        RebalanceEvent[] memory result = new RebalanceEvent[](count);
-        for (uint256 i = 0; i < count; i++) {
-            result[i] = rebalanceHistory[len - count + i];
+        // Forward to active protocol if configured
+        if (protocols.length > 0 && protocols[activeProtocolId].adapter != address(0)) {
+            _depositToProtocol(activeProtocolId, assets);
         }
-        return result;
+
+        emit Deposited(msg.sender, assets, shares);
     }
 
-    function getBestProtocol() external view returns (Protocol best, uint256 bestRate) {
-        uint256 aave = protocolYieldRates[Protocol.AAVE];
-        uint256 compound = protocolYieldRates[Protocol.COMPOUND];
-        uint256 curve = protocolYieldRates[Protocol.CURVE];
+    /// @notice Withdraw USDC by burning shares
+    function withdraw(uint256 shares) external nonReentrant whenNotPaused returns (uint256 assets) {
+        UserPosition storage pos = positions[msg.sender];
+        if (shares == 0) revert ZeroShares();
+        if (pos.shares < shares) revert InsufficientShares();
 
-        if (aave >= compound && aave >= curve) return (Protocol.AAVE, aave);
-        if (compound >= aave && compound >= curve) return (Protocol.COMPOUND, compound);
-        return (Protocol.CURVE, curve);
+        assets = _convertToAssets(shares);
+        if (assets == 0) revert ZeroAmount();
+
+        pos.shares  -= shares;
+        totalShares -= shares;
+        totalAssets -= assets;
+
+        // Withdraw from active protocol if needed
+        if (protocols.length > 0 && protocols[activeProtocolId].adapter != address(0)) {
+            _withdrawFromProtocol(activeProtocolId, assets);
+        }
+
+        asset.safeTransfer(msg.sender, assets);
+        emit Withdrawn(msg.sender, assets, shares);
+    }
+
+    // ─── Cross-chain rebalance (called by CrossYieldOApp) ───────────────────
+
+    /// @notice Rebalance vault: move funds from current protocol to a better one
+    /// @param toProtocolId Target protocol index
+    /// @param aiReason Claude's explanation for this rebalance
+    function rebalance(
+        uint256 toProtocolId,
+        string calldata aiReason
+    ) external onlyCrossYieldOApp nonReentrant {
+        if (toProtocolId >= protocols.length) revert InvalidProtocol();
+        if (toProtocolId == activeProtocolId) revert SameProtocol();
+
+        uint256 currentBalance = _getProtocolBalance(activeProtocolId);
+        uint256 fromId = activeProtocolId;
+
+        // Withdraw all from current protocol
+        if (currentBalance > 0 && protocols[fromId].adapter != address(0)) {
+            _withdrawFromProtocol(fromId, currentBalance);
+        }
+
+        // Deposit all into new protocol
+        uint256 vaultBalance = asset.balanceOf(address(this));
+        if (vaultBalance > 0 && protocols[toProtocolId].adapter != address(0)) {
+            _depositToProtocol(toProtocolId, vaultBalance);
+        }
+
+        // Record history
+        rebalanceHistory.push(RebalanceRecord({
+            timestamp:     block.timestamp,
+            fromProtocolId: fromId,
+            toProtocolId:  toProtocolId,
+            amount:        currentBalance,
+            aiReason:      aiReason
+        }));
+
+        activeProtocolId = toProtocolId;
+
+        emit Rebalanced(fromId, toProtocolId, currentBalance, aiReason);
+    }
+
+    /// @notice Receive bridged funds from another chain and deposit them
+    function receiveFromChain(address user, uint256 amount) external onlyCrossYieldOApp {
+        // Funds already transferred to this contract via bridge
+        totalAssets += amount;
+
+        uint256 shares = _convertToShares(amount);
+        totalShares += shares;
+
+        UserPosition storage pos = positions[user];
+        pos.shares         += shares;
+        pos.totalDeposited += amount;
+
+        if (protocols.length > 0 && protocols[activeProtocolId].adapter != address(0)) {
+            _depositToProtocol(activeProtocolId, amount);
+        }
+
+        emit Deposited(user, amount, shares);
+    }
+
+    // ─── Views ──────────────────────────────────────────────────────────────
+
+    function getUserAssets(address user) external view returns (uint256) {
+        return _convertToAssets(positions[user].shares);
+    }
+
+    function getProtocolCount() external view returns (uint256) {
+        return protocols.length;
+    }
+
+    function getRebalanceHistoryLength() external view returns (uint256) {
+        return rebalanceHistory.length;
+    }
+
+    function getRebalanceRecord(uint256 index) external view returns (RebalanceRecord memory) {
+        return rebalanceHistory[index];
+    }
+
+    function previewDeposit(uint256 assets) external view returns (uint256) {
+        return _convertToShares(assets);
+    }
+
+    function previewWithdraw(uint256 shares) external view returns (uint256) {
+        return _convertToAssets(shares);
+    }
+
+    // ─── Internal ───────────────────────────────────────────────────────────
+
+    function _convertToShares(uint256 assets) internal view returns (uint256) {
+        if (totalShares == 0 || totalAssets == 0) {
+            return assets; // 1:1 for first deposit
+        }
+        return (assets * totalShares) / totalAssets;
+    }
+
+    function _convertToAssets(uint256 shares) internal view returns (uint256) {
+        if (totalShares == 0) return 0;
+        return (shares * totalAssets) / totalShares;
+    }
+
+    function _depositToProtocol(uint256 protocolId, uint256 amount) internal {
+        Protocol storage p = protocols[protocolId];
+        asset.forceApprove(p.adapter, amount);
+        // Low-level call to adapter's deposit function
+        (bool ok,) = p.adapter.call(
+            abi.encodeWithSignature("deposit(address,uint256,address)", address(asset), amount, address(this))
+        );
+        if (ok) {
+            p.totalDeposited += amount;
+        }
+    }
+
+    function _withdrawFromProtocol(uint256 protocolId, uint256 amount) internal {
+        Protocol storage p = protocols[protocolId];
+        (bool ok,) = p.adapter.call(
+            abi.encodeWithSignature("withdraw(address,uint256,address)", address(asset), amount, address(this))
+        );
+        if (ok && p.totalDeposited >= amount) {
+            p.totalDeposited -= amount;
+        }
+    }
+
+    function _getProtocolBalance(uint256 protocolId) internal view returns (uint256) {
+        Protocol storage p = protocols[protocolId];
+        if (p.adapter == address(0)) return asset.balanceOf(address(this));
+        (bool ok, bytes memory data) = p.adapter.staticcall(
+            abi.encodeWithSignature("getBalance(address,address)", address(asset), address(this))
+        );
+        if (ok && data.length >= 32) {
+            return abi.decode(data, (uint256));
+        }
+        return asset.balanceOf(address(this));
     }
 }

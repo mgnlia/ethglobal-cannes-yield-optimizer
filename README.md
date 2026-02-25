@@ -1,59 +1,48 @@
-# 🌐 Cross-Chain Yield Optimizer — ETHGlobal Cannes 2026
+# 🌊 CrossYield — Cross-Chain Yield Optimizer
 
-> **AI-powered cross-chain yield optimization with LayerZero V2 + LLM reasoning**
+> ETHGlobal Cannes 2026 submission — $275K pool
 
-[![ETHGlobal Cannes](https://img.shields.io/badge/ETHGlobal-Cannes%202026-%23FF6B35)](https://ethglobal.com/events/cannes2026)
-[![Prize Pool](https://img.shields.io/badge/Prize%20Pool-%24275K-gold)]()
-[![LayerZero V2](https://img.shields.io/badge/LayerZero-V2-blue)]()
-[![License](https://img.shields.io/badge/License-MIT-green)]()
-
-## 🎯 What It Does
-
-The first cross-chain yield optimizer that uses **LLM reasoning** to explain every rebalancing decision in plain English.
-
-1. **Monitor** — Aggregates live yield rates across Aave, Compound, and Curve on 5+ chains
-2. **Reason** — Claude AI explains *why* a rebalance is optimal (risk, gas, APY delta)
-3. **Execute** — LayerZero V2 OApp sends cross-chain messages to move funds atomically
-4. **Report** — Dashboard shows portfolio history, yield comparison, and AI explanations
+CrossYield is an AI-powered cross-chain yield optimizer that automatically moves funds between DeFi protocols across Ethereum and Arbitrum to maximize yield. It uses **LayerZero V2** for trustless cross-chain messaging and **Claude AI** to explain every rebalancing decision in plain English.
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Next.js Dashboard (Vercel)                │
-│         Portfolio View │ Yield Comparison │ AI Explanations  │
-└────────────────────────┬────────────────────────────────────┘
-                         │ Next.js API Routes (serverless)
-┌────────────────────────▼────────────────────────────────────┐
-│              /api/yields  /api/recommend  /api/history        │
-│   Yield Aggregator │ Claude LLM │ Rebalance Orchestrator     │
-└──────┬─────────────────────────────────────────┬────────────┘
-       │                                         │
-┌──────▼──────┐                        ┌─────────▼──────────┐
-│  Aave API   │                        │  LayerZero V2 OApp  │
-│  Compound   │                        │  YieldVault.sol     │
-│  Curve API  │                        │  Sepolia + Arb Sep  │
-└─────────────┘                        └────────────────────┘
+│                        Next.js Frontend                      │
+│          Portfolio View │ Yield Compare │ Rebalance History  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ REST API
+┌──────────────────────────────▼──────────────────────────────┐
+│                      FastAPI Backend                         │
+│   Yield Aggregator (Aave/Compound/Curve) │ Claude AI Engine  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+        ┌──────────────────────┴──────────────────────┐
+        │                                             │
+┌───────▼──────────┐                      ┌──────────▼───────┐
+│   Sepolia L1     │◄────LayerZero V2─────►│ Arbitrum Sepolia │
+│  YieldVault.sol  │     OApp Messaging    │  YieldVault.sol  │
+│  (Aave/Compound) │                       │  (Aave/Curve)    │
+└──────────────────┘                       └──────────────────┘
 ```
 
-## 🔗 LayerZero V2 Integration
+## ✨ Key Features
 
-- **OApp pattern** — YieldVault contract implements OApp on each chain
-- **Cross-chain rebalance** — sends encoded `RebalanceMessage` via LayerZero endpoint
-- **Testnet deployment** — Sepolia (EID: 40161) + Arbitrum Sepolia (EID: 40231)
+- **Cross-chain rebalancing**: LayerZero V2 OApp sends funds from lower-yield to higher-yield chains
+- **AI explanations**: Claude 3.5 Sonnet explains every rebalancing decision in plain English
+- **Live yield data**: Real-time APY from Aave V3, Compound V3, Curve Finance
+- **Gas-aware**: Rebalancing only triggers when yield delta > gas cost
+- **Portfolio dashboard**: Track positions, history, and projected earnings
 
-> ⚠️ **Contract addresses**: Pending testnet deployment — see `contracts/deployments.json` once deployed.
+## 🛠️ Tech Stack
 
-## 🤖 AI Reasoning Layer
-
-Each rebalancing decision includes Claude's explanation:
-> *"Moving 40% of USDC from Ethereum Aave (3.2% APY) to Arbitrum Compound (5.8% APY). Expected gain: +$847/year. Gas cost: ~$12. Break-even: 5.2 days. Risk delta: minimal — both protocols are battle-tested with >$1B TVL."*
-
-Every explanation is stored with a keccak256 hash for auditability.
-
-## 📊 Data Sources
-
-Yield data is aggregated from live protocol APIs (Aave V3 subgraph, Compound V3 API, Curve pools) **with a mock data fallback** for resilience when external APIs are unavailable. The dashboard clearly indicates live vs. fallback mode.
+| Layer | Technology |
+|-------|-----------|
+| Smart Contracts | Solidity 0.8.24, LayerZero V2 OApp |
+| Cross-chain | LayerZero V2 (Sepolia ↔ Arbitrum Sepolia) |
+| Backend | FastAPI, Python 3.11, Anthropic SDK |
+| Frontend | Next.js 14, TailwindCSS, wagmi v2, viem |
+| Deployment | Railway (backend) + Vercel (frontend) |
 
 ## 🚀 Quick Start
 
@@ -62,58 +51,41 @@ Yield data is aggregated from live protocol APIs (Aave V3 subgraph, Compound V3 
 cd contracts
 npm install
 npx hardhat compile
-npx hardhat run scripts/deploy.ts --network sepolia
-npx hardhat run scripts/deploy.ts --network arbitrumSepolia
+npx hardhat deploy --network sepolia
+npx hardhat deploy --network arbitrumSepolia
 ```
 
-### Frontend (includes serverless API)
+### Backend
+```bash
+cd backend
+pip install uv
+uv sync
+uv run uvicorn main:app --reload
+```
+
+### Frontend
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local   # add ANTHROPIC_API_KEY
 npm run dev
 ```
 
-## 📁 Project Structure
+## 📋 Contract Addresses (Testnet)
 
-```
-ethglobal-cannes-yield-optimizer/
-├── contracts/                  # Solidity + Hardhat
-│   ├── contracts/
-│   │   ├── YieldVault.sol      # Main LayerZero OApp
-│   │   └── interfaces/
-│   ├── scripts/
-│   │   └── deploy.ts
-│   ├── test/
-│   │   └── YieldVault.test.ts
-│   └── hardhat.config.ts
-├── frontend/                   # Next.js 14 + serverless API
-│   ├── app/
-│   │   ├── page.tsx            # Dashboard
-│   │   ├── api/
-│   │   │   ├── yields/         # GET /api/yields
-│   │   │   ├── recommend/      # POST /api/recommend
-│   │   │   └── history/        # GET /api/history
-│   │   ├── portfolio/
-│   │   └── history/
-│   ├── components/
-│   └── package.json
-└── README.md
-```
+| Contract | Network | Address |
+|----------|---------|---------|
+| YieldVault | Sepolia | TBD |
+| YieldVault | Arbitrum Sepolia | TBD |
+| CrossYieldOApp | Sepolia | TBD |
+| CrossYieldOApp | Arbitrum Sepolia | TBD |
 
-## 🌐 Live Demo
+## 🏆 ETHGlobal Cannes Prize Targets
 
-- **Dashboard**: https://frontend-self-ten-84.vercel.app
-- **API — Yields**: https://frontend-self-ten-84.vercel.app/api/yields
-- **API — Recommend**: https://frontend-self-ten-84.vercel.app/api/recommend (POST)
-- **API — History**: https://frontend-self-ten-84.vercel.app/api/history
+- **LayerZero**: Best use of LayerZero V2 OApp
+- **Anthropic**: Best Claude integration
+- **Aave**: Best DeFi application
+- **Overall**: Best DeFi project
 
-## 🏆 Hackathon
+## 📄 License
 
-- **Event**: ETHGlobal Cannes 2026 — April 3–5, 2026, Palais des Festivals, Cannes
-- **Submission deadline**: April 5, 2026 at 09:00 CEST
-- **Sponsors targeted**: LayerZero ($20K track), Aave, Anthropic
-- **Novel angle**: LLM reasoning with keccak256-hashed audit trail for every cross-chain yield decision
-
-## License
 MIT
