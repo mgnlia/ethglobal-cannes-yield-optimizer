@@ -2,7 +2,7 @@
 
 > **AI-powered cross-chain yield optimization with LayerZero V2 + LLM reasoning**
 
-[![ETHGlobal Cannes](https://img.shields.io/badge/ETHGlobal-Cannes%202026-%23FF6B35)](https://ethglobal.com/events/cannes)
+[![ETHGlobal Cannes](https://img.shields.io/badge/ETHGlobal-Cannes%202026-%23FF6B35)](https://ethglobal.com/events/cannes2026)
 [![Prize Pool](https://img.shields.io/badge/Prize%20Pool-%24275K-gold)]()
 [![LayerZero V2](https://img.shields.io/badge/LayerZero-V2-blue)]()
 [![License](https://img.shields.io/badge/License-MIT-green)]()
@@ -23,9 +23,9 @@ The first cross-chain yield optimizer that uses **LLM reasoning** to explain eve
 │                    Next.js Dashboard (Vercel)                │
 │         Portfolio View │ Yield Comparison │ AI Explanations  │
 └────────────────────────┬────────────────────────────────────┘
-                         │ REST API
+                         │ Next.js API Routes (serverless)
 ┌────────────────────────▼────────────────────────────────────┐
-│                  FastAPI Backend (Railway)                    │
+│              /api/yields  /api/recommend  /api/history        │
 │   Yield Aggregator │ Claude LLM │ Rebalance Orchestrator     │
 └──────┬─────────────────────────────────────────┬────────────┘
        │                                         │
@@ -42,10 +42,18 @@ The first cross-chain yield optimizer that uses **LLM reasoning** to explain eve
 - **Cross-chain rebalance** — sends encoded `RebalanceMessage` via LayerZero endpoint
 - **Testnet deployment** — Sepolia (EID: 40161) + Arbitrum Sepolia (EID: 40231)
 
+> ⚠️ **Contract addresses**: Pending testnet deployment — see `contracts/deployments.json` once deployed.
+
 ## 🤖 AI Reasoning Layer
 
 Each rebalancing decision includes Claude's explanation:
 > *"Moving 40% of USDC from Ethereum Aave (3.2% APY) to Arbitrum Compound (5.8% APY). Expected gain: +$847/year. Gas cost: ~$12. Break-even: 5.2 days. Risk delta: minimal — both protocols are battle-tested with >$1B TVL."*
+
+Every explanation is stored with a keccak256 hash for auditability.
+
+## 📊 Data Sources
+
+Yield data is aggregated from live protocol APIs (Aave V3 subgraph, Compound V3 API, Curve pools) **with a mock data fallback** for resilience when external APIs are unavailable. The dashboard clearly indicates live vs. fallback mode.
 
 ## 🚀 Quick Start
 
@@ -58,19 +66,11 @@ npx hardhat run scripts/deploy.ts --network sepolia
 npx hardhat run scripts/deploy.ts --network arbitrumSepolia
 ```
 
-### Backend
-```bash
-cd backend
-pip install -r requirements.txt
-export ANTHROPIC_API_KEY=your_key
-export ALCHEMY_API_KEY=your_key
-uvicorn main:app --reload --port 8000
-```
-
-### Frontend
+### Frontend (includes serverless API)
 ```bash
 cd frontend
 npm install
+cp .env.example .env.local   # add ANTHROPIC_API_KEY
 npm run dev
 ```
 
@@ -87,15 +87,13 @@ ethglobal-cannes-yield-optimizer/
 │   ├── test/
 │   │   └── YieldVault.test.ts
 │   └── hardhat.config.ts
-├── backend/                    # FastAPI
-│   ├── main.py                 # API entry point
-│   ├── yield_aggregator.py     # Aave/Compound/Curve rates
-│   ├── llm_reasoning.py        # Claude explanation layer
-│   ├── rebalancer.py           # Rebalancing logic
-│   └── requirements.txt
-├── frontend/                   # Next.js 14
+├── frontend/                   # Next.js 14 + serverless API
 │   ├── app/
 │   │   ├── page.tsx            # Dashboard
+│   │   ├── api/
+│   │   │   ├── yields/         # GET /api/yields
+│   │   │   ├── recommend/      # POST /api/recommend
+│   │   │   └── history/        # GET /api/history
 │   │   ├── portfolio/
 │   │   └── history/
 │   ├── components/
@@ -105,15 +103,17 @@ ethglobal-cannes-yield-optimizer/
 
 ## 🌐 Live Demo
 
-- **Dashboard**: https://ethglobal-cannes-yield-optimizer.vercel.app
-- **API**: https://ethglobal-cannes-yield-optimizer-api.up.railway.app/docs
+- **Dashboard**: https://frontend-self-ten-84.vercel.app
+- **API — Yields**: https://frontend-self-ten-84.vercel.app/api/yields
+- **API — Recommend**: https://frontend-self-ten-84.vercel.app/api/recommend (POST)
+- **API — History**: https://frontend-self-ten-84.vercel.app/api/history
 
 ## 🏆 Hackathon
 
-- **Event**: ETHGlobal Cannes 2026
-- **Deadline**: April 5, 2026
-- **Sponsors targeted**: LayerZero, Aave, Anthropic
-- **Novel angle**: LLM reasoning for cross-chain yield decisions
+- **Event**: ETHGlobal Cannes 2026 — April 3–5, 2026, Palais des Festivals, Cannes
+- **Submission deadline**: April 5, 2026 at 09:00 CEST
+- **Sponsors targeted**: LayerZero ($20K track), Aave, Anthropic
+- **Novel angle**: LLM reasoning with keccak256-hashed audit trail for every cross-chain yield decision
 
 ## License
 MIT
